@@ -52,22 +52,29 @@ def create_users(users_list: list[tuple[str, str]]):
             records.append(create_user(un, pw))
         except (ValueError, ValidationError) as e:
             print(f"[Помилка для {un}]: {e}")
-
-    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["username", "password_hash"])
-        writer.writerows(records)
-        f.flush()  # Примусово записати буфер на диск
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["username", "password_hash"])
+            writer.writerows(records)
+            f.flush()  # Примусово записати буфер на диск
+    except (PermissionError, IOError) as e:
+        print(f"[Помилка запису файлу CSV]: {e}")
 
 def load_users_db() -> list[dict]: # зчитує вміст CSV-файлу у список users_db
     users_db = []
     if not CSV_FILE.exists():
         return users_db
 
-    with open(CSV_FILE, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            users_db.append(row)
+    try:
+        with open(CSV_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                users_db.append(row)
+    except (PermissionError, IOError, csv.Error) as e:
+        print(f"[Помилка читання файлу CSV]: {e}")
+
     return users_db
 
 def log_event(func): # Декоратор для логування подій
@@ -103,34 +110,38 @@ def log_event(func): # Декоратор для логування подій
                         logs = json.load(f)
                 except (json.JSONDecodeError, IOError):
                     logs = []
-
             logs.append(log_entry)
-
-            with open(LOG_FILE, "w", encoding="utf-8") as f:
-                json.dump(logs, f, indent=4, ensure_ascii=False)
+            try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                # ... зчитування та оновлення логів ...
+                    with open(LOG_FILE, "w", encoding="utf-8") as f:
+                     json.dump(logs, f, indent=4, ensure_ascii=False)
+            except (PermissionError, IOError) as e:
+                    print(f"[Помилка запису лог-файлу JSON]: {e}")
 
     return wrapper
 
 @log_event
-def login(username: str, password: str) -> bool: # Функція для входу користувача
-    if username is None or username == "" or password is None or password == "":
-        raise ValueError("Логін та пароль не можуть бути порожніми")
-
-    users_db = load_users_db()
-    salt = str(VARIANT_NUMBER).zfill(5)
-
+def login(username: str, password: str) -> bool:
     try:
+        if not username or not password:
+            raise ValueError("Логін та пароль не можуть бути порожніми")
+
+        salt = str(VARIANT_NUMBER).zfill(5)
         input_hash = generate_hash(password, salt=salt)
-    except ValidationError:
+        users_db = load_users_db()
+
+        for user in users_db:
+            if (
+                user["username"] == username
+                and user["password_hash"] == input_hash
+            ):
+                return True
         return False
 
-    for user in users_db:
-        if (
-            user["username"] == username
-            and user["password_hash"] == input_hash
-        ):
-            return True
-    return False
+    except (ValueError, ValidationError) as e:
+        print(f"[Помилка авторизації для {username}]: {e}")
+        return False
 
 
 
@@ -176,16 +187,8 @@ def main():
             res = login(un, pw)
             status = "Успішно (True)" if res else "Відхилено (False)"
             print(f"{un} | {pw} | {status}")
-
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IOError,
-        ValidationError,
-        ValueError,
-    ) as e:
-        print(f"[ОБРОБЛЕНО ВИНЯТОК]: {e}")
-
+    except Exception as e:
+        print(f"[Помилка виконання у main]: {e}")
 
 if __name__ == "__main__":
     main()
