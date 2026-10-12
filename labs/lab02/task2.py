@@ -1,8 +1,8 @@
-import argparse
+import argparse # Дозволяє передавати параметри у програму під час запуску
 import csv
 import json
 import logging
-import re
+import re # Модуль регулярних виразів для перевірки формату
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -13,7 +13,7 @@ MAC_REGEX = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
 
 
 @dataclass
-class ARPEntry:
+class ARPEntry: # Об'єкт для збереження інформації про один перевірений запис
     ip: str
     mac: str
     interface: str
@@ -21,7 +21,7 @@ class ARPEntry:
 
 
 @dataclass
-class ARPAuditReport:
+class ARPAuditReport: # Загальна структура підсумкового звіту
     total_parsed: int
     valid_entries: int
     invalid_syntax_count: int
@@ -30,11 +30,25 @@ class ARPAuditReport:
 
 def parse_arp_csv(file_path: Path) -> list[dict]:
     entries = []
-    with open(file_path, mode="r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            clean_row = {k.strip(): v.strip() for k, v in row.items()}
-            entries.append(clean_row)
+    try:
+        with open(file_path, mode="r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                clean_row = {k.strip(): v.strip() for k, v in row.items() if k and v}
+                entries.append(clean_row)
+    except FileNotFoundError:
+        logging.error(f"Файл не знайдено за шляхом: {file_path}")
+        raise
+    except PermissionError:
+        logging.error(f"Недостатньо прав для читання файлу: {file_path}")
+        raise
+    except csv.Error as e:
+        logging.error(f"Помилка зчитування CSV файлу {file_path}: {e}")
+        raise
+    except Exception as e:
+        logging.error(f"Невідома помилка при відкритті CSV {file_path}: {e}")
+        raise
+
     return entries
 
 
@@ -53,11 +67,11 @@ def analyze_arp_data(data: list[dict]):
             invalid_count += 1
             logging.warning(f"Невалідний запис: IP={ip}, MAC={mac}")
             continue
-
+        # нормалізація MAC-адреси для уніфікації (великі літери та двокрапки)
         mac_norm = mac.upper().replace("-", ":")
         entry = ARPEntry(ip=ip, mac=mac_norm, interface=iface, type=e_type)
         valid_entries.append(entry)
-
+        # Групування IP-адрес за MAC-адресою
         if mac_norm not in mac_to_ips:
             mac_to_ips[mac_norm] = set()
         mac_to_ips[mac_norm].add(ip)
@@ -72,11 +86,26 @@ def analyze_arp_data(data: list[dict]):
 
 def main():
     parser = argparse.ArgumentParser(description="Аудитор ARP-таблиць")
-    parser.add_argument("--arp-file", type=Path, required=True, help="Шлях до CSV файлу ARP")
-    parser.add_argument("--output-json", type=Path, required=True, help="Шлях для збереження звіту")
-    parser.add_argument("--detect-spoofing", action="store_true", help="Перевірка ARP-Spoofing")
+    
+    parser.add_argument(
+        "--arp-file", 
+        type=Path, 
+        default=Path("labs/lab02/data/data_v11/arp_table.csv"), 
+        help="Шлях до CSV файлу ARP"
+    )
+    parser.add_argument(
+        "--output-json", 
+        type=Path, 
+        default=Path("labs/lab02/data/data_v11/arp_security_alerts.json"), 
+        help="Шлях для збереження звіту"
+    )
+    parser.add_argument(
+        "--detect-spoofing", 
+        action="store_true", 
+        default=True,  # Увімкнено за замовчуванням
+        help="Перевірка ARP-Spoofing"
+    )
     parser.add_argument("--log-file", type=Path, help="Файл логування")
-
     args = parser.parse_args()
 
     handlers = [logging.StreamHandler()]
@@ -88,8 +117,12 @@ def main():
     if not args.arp_file.exists():
         logging.error(f"Файл не знайдено: {args.arp_file}")
         return
+    try:
+        raw_data = parse_arp_csv(args.arp_file)
+    except Exception:
+        logging.error("Аналіз перервано через помилку зчитування файлу.")
+        return
 
-    raw_data = parse_arp_csv(args.arp_file)
     valid_entries, invalid_count, conflicts = analyze_arp_data(raw_data)
 
     print("\nValidated Entries Summary")
@@ -108,11 +141,15 @@ def main():
         spoofing_conflicts=conflicts,
     )
 
-    args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output_json, "w", encoding="utf-8") as f:
-        json.dump(asdict(report), f, indent=4)
-
-    logging.info(f"Звіт збережено у {args.output_json}")
+    try:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.output_json, "w", encoding="utf-8") as f:
+            json.dump(asdict(report), f, indent=4, ensure_ascii=False)
+        logging.info(f"Звіт успішно збережено у {args.output_json}")
+    except PermissionError:
+        logging.error(f"Недостатньо прав для запису підсумкового JSON у: {args.output_json}")
+    except OSError as e:
+        logging.error(f"Помилка введення/виведення під час запису звіту: {e}")
 
 
 if __name__ == "__main__":
